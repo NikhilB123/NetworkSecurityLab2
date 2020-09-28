@@ -76,7 +76,10 @@ class TLSSession:
         1. set client_time, client_bytes
         2. calculate client_random. There is a method for this
         """
-        pass
+        self.client_time = time_part 
+        self.client_random_bytes = random_part
+        self.client_random = self.time_and_random(time_part, random_part)
+
 
     def set_server_random(self):
         # STUDENT TODO
@@ -84,6 +87,10 @@ class TLSSession:
         1. set server_time, server_bytes
         2. calculate server_random. There is a method for this
         """
+        self.server_time = int(time.time())
+        self.server_random_bytes = randstring(28)
+        self.server_random = self.time_and_random(self.server_time, self.server_random_bytes)
+
         pass
 
     def set_server_rsa_privkey(self, rsa_privkey):
@@ -107,6 +114,8 @@ class TLSSession:
         3. calculate a key block
         4. split the key block into read and write keys for enc and mac
         """
+        self.master_secret = self.PRF.compute_master_secret(self.pre_master_secret, self.client_random, self.server_random)
+        key_block = self.PRF.derive_key_block(self.master_secret, self.client_random, self.server_random, )
         pass
 
     def tls_sign(self, bytes):
@@ -307,10 +316,10 @@ class TLS_Visibility:
         exceptions. If that's happening, you can
         try uncommenting this try except block
         """
-        #try:
+        try:
             return self.process_tls_data_unsafe(data)
-        #except Exception as e:
-        #    return ("failure", e)
+        except Exception as e:
+           return ("failure", e)
 
     def process_tls_data_unsafe(self, data):
         output = b""
