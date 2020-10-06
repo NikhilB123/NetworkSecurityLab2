@@ -117,6 +117,8 @@ class TLSSession:
         self.pre_master_secret = self.server_dh_privkey.exchange(self.client_dh_pubkey)
         self.master_secret = self.PRF.compute_master_secret(self.pre_master_secret, self.client_random, self.server_random)
         key_block = self.PRF.derive_key_block(self.master_secret, self.client_random, self.server_random)
+
+        # look into block order
         index = 0
         self.write_enc = key_block[:self.enc_key_size]
         index += self.enc_key_size
@@ -133,7 +135,9 @@ class TLSSession:
         1. Create a TLSSignature object. set sig_alg to 0x0401
         2. use this object to sign the bytes
         """
-        return b""
+        sig = _TLSSignature(0x0401)
+        sig._update_sig(bytes, self.server_rsa_privkey)
+        return sig
 
     def decrypt_tls_pkt(self, tls_pkt, **kargs):
         # scapy screws up and changes the first byte if it can't decrypt it
@@ -151,7 +155,24 @@ class TLSSession:
         5. return ONLY the decrypted plaintext data
         6. NOTE: When you do the HMAC, don't forget to re-create the header with the plaintext len!
         """
-        return b""
+        iv = tls_pkt_bytes[:16]
+        aes = algorithms.AES(self.read_enc)
+        mode = modes.CBC(iv)
+        cipher = Cipher(aes, mode, default_backend())
+        decrypter = cipher.decrypter()
+
+        padding = int(tls_pkt_bytes[:-1])
+        ciphertext = tls_pkt_bytes[16:-1]
+
+        decrypted_pkt = (decrypter.update(ciphertext) + decrypter.finalize())[:-1 * padding]
+        plaintext_bytes = decrypted_pkt[:-1 * self.mac_key_size]
+        hashed_val = decrypted_pkt[-1 * self.mac_key_size:]
+
+        hmac = crypto_hmac.HMAC(self.read_mac, hashes.SHA1(), default_backend())
+        hmac.update(plaintext_bytes)
+        if hmac.finalize() != hashed_val:
+            raise ValueError("Hashes are not equal!")
+        return plaintext_bytes
 
     def encrypt_tls_pkt(self, tls_pkt):
         pkt_type = tls_pkt.type
@@ -173,7 +194,26 @@ class TLSSession:
         5. You can use os.urandom(16) to create an explicit IV
         6. return the iv + encrypted data
         """
-        return b""
+        # generate hash of plaintext
+        hmac = crypto_hmac.HMAC(self.write_mac, hashes.SHA1(), default_backend())
+        hmac.update(plaintext_bytes)
+        hashed_val = hmac.finalize()
+
+        # create cipher encryption object
+        aes = algorithms.AES(self.write_enc)
+        iv = os.urandom(16)
+        mode = modes.CBC(iv)
+        cipher = Cipher(aes, mode, default_backend())
+        encrypter = cipher.encrypter()
+        
+        # encrypt plaintext + hashed plaintext
+        padding = b""
+        remainder = len(plaintext_bytes) % 16
+        if remainder:
+            padding = b"0" * (16 - remainder) 
+        ciphertext = e.update(plaintext_bytes + hashed_val + padding) + e.finalize()
+
+        return iv + ciphertext + bytes([len(padding)])
 
     def record_handshake_message(self, m):
         self.handshake_messages += m
@@ -187,7 +227,8 @@ class TLSSession:
             arg_3: all the handshake messages so far
             arg_4: the master secret
         """
-        return b""
+        res = self.PRF.compute_handshake_verify("server", mode, self.handshake_messages, self.master_secret)
+        return res
 
     def time_and_random(self, time_part, random_part=None):
         if random_part is None:
