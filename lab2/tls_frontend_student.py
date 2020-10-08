@@ -161,7 +161,7 @@ class TLSSession:
         cipher = Cipher(aes, mode, default_backend())
         decrypter = cipher.decrypter()
 
-        padding = int(tls_pkt_bytes[:-1])
+        padding = int(tls_pkt_bytes[-1])
         ciphertext = tls_pkt_bytes[16:-1]
 
         decrypted_pkt = (decrypter.update(ciphertext) + decrypter.finalize())[:-1 * padding]
@@ -211,7 +211,7 @@ class TLSSession:
         remainder = len(plaintext_bytes) % 16
         if remainder:
             padding = b"0" * (16 - remainder) 
-        ciphertext = e.update(plaintext_bytes + hashed_val + padding) + e.finalize()
+        ciphertext = encrypter.update(plaintext_bytes + hashed_val + padding) + encrypter.finalize()
 
         return iv + ciphertext + bytes([len(padding)])
 
@@ -281,8 +281,14 @@ class TLS_Visibility:
             6. store in the provided server_hello, server_cert, server_key_exchange,
                 and server_hello_done variables
             """
-            server_hello = None
-            server_cert = None
+            # 1
+            self.session.set_client_random(tls_msg.gmt_unix_time, tls_msg.random_bytes)
+            # 2
+            self.session.set_client_random()
+            server_hello = TLSServerHello(self.session.server_time, self.session.server_random_bytes, 0x303, TLS_DHE_RSA_WITH_AES_128_CBC_SHA.val)
+            # 3
+            server_cert = TLSCertificate(certs=[self.cert])
+            # 4
             server_key_exchange = None
             server_hello_done = None
             f_session = tlsSession()
