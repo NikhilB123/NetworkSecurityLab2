@@ -91,7 +91,6 @@ class TLSSession:
         self.server_random_bytes = randstring(28)
         self.server_random = self.time_and_random(self.server_time, self.server_random_bytes)
 
-        pass
 
     def set_server_rsa_privkey(self, rsa_privkey):
         self.server_rsa_privkey = rsa_privkey
@@ -135,7 +134,7 @@ class TLSSession:
         1. Create a TLSSignature object. set sig_alg to 0x0401
         2. use this object to sign the bytes
         """
-        sig = _TLSSignature(0x0401)
+        sig = _TLSSignature(sig_alg=0x0401)
         sig._update_sig(bytes, self.server_rsa_privkey)
         return sig
 
@@ -268,6 +267,7 @@ class TLS_Visibility:
             debug.scapy_show(tls_msg)
  
             self.session.set_server_rsa_privkey(self.private_key)
+            self.session.set_server_random()
             # STUDENT TODO
             """ 
             Instructions:
@@ -284,13 +284,15 @@ class TLS_Visibility:
             # 1
             self.session.set_client_random(tls_msg.gmt_unix_time, tls_msg.random_bytes)
             # 2
-            self.session.set_client_random()
             server_hello = TLSServerHello(self.session.server_time, self.session.server_random_bytes, 0x303, TLS_DHE_RSA_WITH_AES_128_CBC_SHA.val)
             # 3
             server_cert = TLSCertificate(certs=[self.cert])
             # 4
-            server_key_exchange = None
-            server_hello_done = None
+            params = self.session.server_dh_params
+            sig = self.session.tls_sign(self.session.client_random + self.session.server_random + raw(params))
+            server_key_exchange = TLSServerKeyExchange(params, sig)
+            # 5
+            server_hello_done = TLSServerHelloDone()
             f_session = tlsSession()
             f_session.tls_version = 0x303
             tls_response = TLS(msg=[server_hello, server_cert, server_key_exchange, server_hello_done],
@@ -306,6 +308,8 @@ class TLS_Visibility:
             1. process the client key exchange by extracting the "exchkeys"
             2. These can be passed directly to session.set_client_dh_params
             """ 
+            exchkeys = tls_msg.exchkeys
+            self.session.set_client_dh_params(exchkeys)
                 
             
         elif isinstance(tls_msg, TLSFinished):
@@ -371,10 +375,11 @@ class TLS_Visibility:
         exceptions. If that's happening, you can
         try uncommenting this try except block
         """
-        try:
-            return self.process_tls_data_unsafe(data)
-        except Exception as e:
-           return ("failure", e)
+        # try:
+        #     return self.process_tls_data_unsafe(data)
+        # except Exception as e:
+        #    return ("failure", e)
+        return self.process_tls_data_unsafe(data)
 
     def process_tls_data_unsafe(self, data):
         output = b""
@@ -501,7 +506,7 @@ class TLSFrontend(asyncio.Protocol):
         
 def main(args): 
     # uncomment the next line to turn on debug
-    # debug.enabled = True
+    debug.enabled = True
     frontend_port, backend_port, tls_cert, tls_key = args
     with open(tls_cert, "rb") as cert_obj:
         cert = x509.load_pem_x509_certificate(cert_obj.read())
