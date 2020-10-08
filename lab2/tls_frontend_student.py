@@ -115,7 +115,7 @@ class TLSSession:
         """
         self.pre_master_secret = self.server_dh_privkey.exchange(self.client_dh_pubkey)
         self.master_secret = self.PRF.compute_master_secret(self.pre_master_secret, self.client_random, self.server_random)
-        key_block = self.PRF.derive_key_block(self.master_secret, self.client_random, self.server_random)
+        key_block = self.PRF.derive_key_block(self.master_secret, self.client_random, self.server_random, self.key_block_len)
 
         # look into block order
         index = 0
@@ -284,13 +284,16 @@ class TLS_Visibility:
             # 1
             self.session.set_client_random(tls_msg.gmt_unix_time, tls_msg.random_bytes)
             # 2
-            server_hello = TLSServerHello(self.session.server_time, self.session.server_random_bytes, 0x303, TLS_DHE_RSA_WITH_AES_128_CBC_SHA.val)
+            server_hello = TLSServerHello(gmt_unix_time=self.session.server_time, 
+                                          random_bytes=self.session.server_random_bytes, 
+                                          version=0x303, 
+                                          cipher=TLS_DHE_RSA_WITH_AES_128_CBC_SHA.val)
             # 3
             server_cert = TLSCertificate(certs=[self.cert])
             # 4
             params = self.session.server_dh_params
             sig = self.session.tls_sign(self.session.client_random + self.session.server_random + raw(params))
-            server_key_exchange = TLSServerKeyExchange(params, sig)
+            server_key_exchange = TLSServerKeyExchange(params=params, sig=sig)
             # 5
             server_hello_done = TLSServerHelloDone()
             f_session = tlsSession()
@@ -308,7 +311,8 @@ class TLS_Visibility:
             1. process the client key exchange by extracting the "exchkeys"
             2. These can be passed directly to session.set_client_dh_params
             """ 
-            exchkeys = tls_msg.exchkeys
+            exchkeys = ClientDiffieHellmanPublic(tls_msg.exchkeys)
+
             self.session.set_client_dh_params(exchkeys)
                 
             
