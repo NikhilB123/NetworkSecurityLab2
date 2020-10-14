@@ -115,7 +115,7 @@ class TLSSession:
         """
         self.pre_master_secret = self.server_dh_privkey.exchange(self.client_dh_pubkey)
         self.master_secret = self.PRF.compute_master_secret(self.pre_master_secret, self.client_random, self.server_random)
-        key_block = self.PRF.derive_key_block(self.master_secret, self.client_random, self.server_random, self.key_block_len)
+        key_block = self.PRF.derive_key_block(self.master_secret, self.server_random, self.client_random, self.key_block_len)
 
         # look into block order
         index = 0
@@ -154,16 +154,23 @@ class TLSSession:
         5. return ONLY the decrypted plaintext data
         6. NOTE: When you do the HMAC, don't forget to re-create the header with the plaintext len!
         """
+        # need to account for message header
         iv = tls_pkt_bytes[:16]
         aes = algorithms.AES(self.read_enc)
         mode = modes.CBC(iv)
         cipher = Cipher(aes, mode, default_backend())
         decrypter = cipher.decrypter()
 
-        padding = int(tls_pkt_bytes[-1])
-        ciphertext = tls_pkt_bytes[16:-1]
+        ciphertext = tls_pkt_bytes[16:]
+        decrypted_pkt = (decrypter.update(ciphertext) + decrypter.finalize())
+        padding = int(decrypted_pkt[-1])
+        # remove padding from decrypted packet
+        decrypted_pkt = decrypted_pkt[:(-1 * padding - 1)]
 
-        decrypted_pkt = (decrypter.update(ciphertext) + decrypter.finalize())[:-1 * padding]
+        # padding = int(tls_pkt_bytes[-1])
+        # ciphertext = tls_pkt_bytes[16:-1]
+
+        # decrypted_pkt = (decrypter.update(ciphertext) + decrypter.finalize())[:-1 * padding]
         plaintext_bytes = decrypted_pkt[:-1 * self.mac_key_size]
         hashed_val = decrypted_pkt[-1 * self.mac_key_size:]
 
@@ -205,14 +212,15 @@ class TLSSession:
         cipher = Cipher(aes, mode, default_backend())
         encrypter = cipher.encrypter()
         
-        # encrypt plaintext + hashed plaintext
+        # encrypt plaintext + hashed plaintext + padding + padding val
         padding = b""
-        remainder = len(plaintext_bytes) % 16
+        remainder = (len(plaintext_bytes) + hashed_val + 1) % 16
         if remainder:
             padding = b"0" * (16 - remainder) 
-        ciphertext = encrypter.update(plaintext_bytes + hashed_val + padding) + encrypter.finalize()
+        ciphertext = encrypter.update(plaintext_bytes + hashed_val + padding + bytes([len(padding)])) + encrypter.finalize()
 
-        return iv + ciphertext + bytes([len(padding)])
+        # TODO: add message header?
+        return iv + ciphertext
 
     def record_handshake_message(self, m):
         self.handshake_messages += m
