@@ -155,29 +155,40 @@ class TLSSession:
         6. NOTE: When you do the HMAC, don't forget to re-create the header with the plaintext len!
         """
         # need to account for message header
+        type_val = struct.pack('b', tls_pkt_bytes[0])
+        version_val = tls_pkt_bytes[1:3]
+        ciphertext_len = tls_pkt_bytes[3:5]
+        tls_pkt_bytes = tls_pkt_bytes[5:]
+
+        # get IV and create decryptor object 
         iv = tls_pkt_bytes[:16]
         aes = algorithms.AES(self.read_enc)
         mode = modes.CBC(iv)
         cipher = Cipher(aes, mode, default_backend())
-        decrypter = cipher.decrypter()
+        decryptor = cipher.decryptor()
 
+        # decrypt ciphertext
         ciphertext = tls_pkt_bytes[16:]
-        decrypted_pkt = (decrypter.update(ciphertext) + decrypter.finalize())
-        padding = int(decrypted_pkt[-1])
+        decrypted_pkt = (decryptor.update(ciphertext) + decryptor.finalize())
+        # print(type(decrypted_pkt[-1]))
+        # padding = int.from_bytes(decrypted_pkt[-1], byteorder='big')
+        padding = decrypted_pkt[-1]
         # remove padding from decrypted packet
         decrypted_pkt = decrypted_pkt[:(-1 * padding - 1)]
 
-        # padding = int(tls_pkt_bytes[-1])
-        # ciphertext = tls_pkt_bytes[16:-1]
-
-        # decrypted_pkt = (decrypter.update(ciphertext) + decrypter.finalize())[:-1 * padding]
+        # extract plaintext + hmac from decrypted ciphertext (remove padding)
         plaintext_bytes = decrypted_pkt[:-1 * self.mac_key_size]
+        # get hmac value from plaintext + hmac
         hashed_val = decrypted_pkt[-1 * self.mac_key_size:]
 
+        # compare hmac sent in packet to our own computed hmac
         hmac = crypto_hmac.HMAC(self.read_mac, hashes.SHA1(), default_backend())
-        hmac.update(plaintext_bytes)
+        hmac.update(struct.pack('q', self.read_seq_num) + type_val + version_val + struct.pack('h', len(plaintext_bytes)) + plaintext_bytes)
         if hmac.finalize() != hashed_val:
+            print(struct.pack('q', self.read_seq_num) + type_val + version_val + struct.pack('h', len(plaintext_bytes)) + plaintext_bytes)
             raise ValueError("Hashes are not equal!")
+        self.read_seq_num += 1
+
         return plaintext_bytes
 
     def encrypt_tls_pkt(self, tls_pkt):
@@ -202,7 +213,12 @@ class TLSSession:
         """
         # generate hash of plaintext
         hmac = crypto_hmac.HMAC(self.write_mac, hashes.SHA1(), default_backend())
-        hmac.update(plaintext_bytes)
+        seq_num = struct.pack('q', self.write_seq_num)
+        type_num = struct.pack('b', tls_pkt_bytes[0])
+        version_num = tls_pkt_bytes[1:3]
+        len_num = struct.pack('h', len(plaintext_bytes))
+        hmac.update(seq_num + type_num + version_num + len_num + plaintext_bytes)
+        print('\n\n\n',seq_num + type_num + version_num + len_num + plaintext_bytes,'\n\n\n')
         hashed_val = hmac.finalize()
 
         # create cipher encryption object
@@ -210,17 +226,17 @@ class TLSSession:
         iv = os.urandom(16)
         mode = modes.CBC(iv)
         cipher = Cipher(aes, mode, default_backend())
-        encrypter = cipher.encrypter()
+        encryptor = cipher.encryptor()
         
         # encrypt plaintext + hashed plaintext + padding + padding val
         padding = b""
-        remainder = (len(plaintext_bytes) + hashed_val + 1) % 16
+        remainder = (len(plaintext_bytes) + len(hashed_val) + 1) % 16
         if remainder:
             padding = b"0" * (16 - remainder) 
-        ciphertext = encrypter.update(plaintext_bytes + hashed_val + padding + bytes([len(padding)])) + encrypter.finalize()
+        ciphertext = encryptor.update(plaintext_bytes + hashed_val + padding + bytes([len(padding)])) + encryptor.finalize()
 
-        # TODO: add message header?
-        return iv + ciphertext
+        self.write_seq_num += 1
+        return type_num + tls_pkt_bytes[1:3] + struct.pack('h', len(iv + ciphertext)) + iv + ciphertext
 
     def record_handshake_message(self, m):
         self.handshake_messages += m
@@ -234,7 +250,7 @@ class TLSSession:
             arg_3: all the handshake messages so far
             arg_4: the master secret
         """
-        res = self.PRF.compute_handshake_verify("server", mode, self.handshake_messages, self.master_secret)
+        res = self.PRF.compute_verify_data("server", mode, self.handshake_messages, self.master_secret)
         return res
 
     def time_and_random(self, time_part, random_part=None):
@@ -310,6 +326,11 @@ class TLS_Visibility:
                 tls_session=f_session)
             tls_response_bytes = raw(tls_response)
             debug.scapy_show(tls_response)
+
+
+            self.session.record_handshake_message(raw(tls_msg))
+            self.session.record_handshake_message(tls_response_bytes)
+
             return tls_response_bytes
         elif isinstance(tls_msg, TLSClientKeyExchange):
             debug.print("Got key exchange")
@@ -322,6 +343,7 @@ class TLS_Visibility:
             exchkeys = ClientDiffieHellmanPublic(tls_msg.exchkeys)
 
             self.session.set_client_dh_params(exchkeys)
+            self.session.record_handshake_message(raw(tls_msg))
                 
             
         elif isinstance(tls_msg, TLSFinished):
@@ -335,7 +357,8 @@ class TLS_Visibility:
             2. Create the change cipher spec
             3. store in server_change_cipher_spec
             """
-            server_change_cipher_spec = None
+            self.session.record_handshake_message(raw(tls_msg))
+            server_change_cipher_spec = TLSChangeCipherSpec()
             msg1 = TLS(msg=[server_change_cipher_spec])
             output = raw(msg1)
 
@@ -348,16 +371,22 @@ class TLS_Visibility:
             """
             f_session = tlsSession()
             f_session.tls_version = 0x303
-            server_finished = None
+            server_finished = TLSFinished(vdata=self.session.compute_handshake_verify('write'),
+                            tls_session=f_session)
             
             msg2 = TLS(msg=[server_finished], tls_session=f_session)
             
+            # MAY BREAK THINGS
+            # msg2.type = 22
+
+
             # STUDENT TODO
             """
             1. encrypt the tls finished message (msg2). You already have a method for this.
             2. store in encrypted_finished
             """
-            encrypted_finished = b""
+            # encrypted_finished = self.session.encrypt_tls_pkt(msg2)
+            encrypted_finished = self.encrypt_data(msg2)
             
             self.session.handshake = False
             return output+encrypted_finished
@@ -369,8 +398,8 @@ class TLS_Visibility:
             3. store in plaintext_data
             4. The provided code already re-creates the TLSFinished from your decrypted data
             """
-            plaintext_data = None
-
+            plaintext_data = self.session.decrypt_tls_pkt(tls_pkt)
+            
             # We re-create the TLS message with the decrypted handshake
             # Then we call `process_tls_handshake` again with this new message
             f_session = tlsSession()
@@ -436,7 +465,7 @@ class TLS_Visibility:
                 2. decrypt the packet to application_data. You should already have a method for this.
                 3. store in application_data
                 """
-                application_data = None
+                application_data = self.session.decrypt_tls_pkt(tls_pkt)
                 application_pkt = TLSApplicationData(application_data)
                 output += application_pkt.data
             else:
