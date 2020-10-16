@@ -119,13 +119,20 @@ class TLSSession:
 
         # look into block order
         index = 0
-        self.write_enc = key_block[:self.enc_key_size]
-        index += self.enc_key_size
-        self.read_enc = key_block[index:self.enc_key_size + index]
-        index += self.enc_key_size
+        # self.write_enc = key_block[:self.enc_key_size]
+        # index += self.enc_key_size
+        # self.read_enc = key_block[index:self.enc_key_size + index]
+        # index += self.enc_key_size
+        # self.write_mac = key_block[index:self.mac_key_size + index]
+        # index += self.mac_key_size
+        # self.read_mac = key_block[index:self.mac_key_size + index]
+        self.read_mac = key_block[index:self.mac_key_size + index]
+        index += self.mac_key_size
         self.write_mac = key_block[index:self.mac_key_size + index]
         index += self.mac_key_size
-        self.read_mac = key_block[index:self.mac_key_size + index]
+        self.read_enc = key_block[index:self.enc_key_size + index]
+        index += self.enc_key_size
+        self.write_enc = key_block[index:self.enc_key_size + index]
 
     def tls_sign(self, bytes):
         # sig_alg 0x0401 = sha256+rsa as per our certificate
@@ -155,7 +162,7 @@ class TLSSession:
         6. NOTE: When you do the HMAC, don't forget to re-create the header with the plaintext len!
         """
         # need to account for message header
-        type_val = struct.pack('b', tls_pkt_bytes[0])
+        type_val = struct.pack('!b', tls_pkt_bytes[0])
         version_val = tls_pkt_bytes[1:3]
         ciphertext_len = tls_pkt_bytes[3:5]
         tls_pkt_bytes = tls_pkt_bytes[5:]
@@ -174,7 +181,9 @@ class TLSSession:
         # padding = int.from_bytes(decrypted_pkt[-1], byteorder='big')
         padding = decrypted_pkt[-1]
         # remove padding from decrypted packet
+        # print('padding bytes:',decrypted_pkt[(-1 * padding - 1):])
         decrypted_pkt = decrypted_pkt[:(-1 * padding - 1)]
+        # print('decrypted packet:', decrypted_pkt)
 
         # extract plaintext + hmac from decrypted ciphertext (remove padding)
         plaintext_bytes = decrypted_pkt[:-1 * self.mac_key_size]
@@ -183,9 +192,17 @@ class TLSSession:
 
         # compare hmac sent in packet to our own computed hmac
         hmac = crypto_hmac.HMAC(self.read_mac, hashes.SHA1(), default_backend())
-        hmac.update(struct.pack('q', self.read_seq_num) + type_val + version_val + struct.pack('h', len(plaintext_bytes)) + plaintext_bytes)
-        if hmac.finalize() != hashed_val:
-            print(struct.pack('q', self.read_seq_num) + type_val + version_val + struct.pack('h', len(plaintext_bytes)) + plaintext_bytes)
+        hmac.update(struct.pack('!q', self.read_seq_num) + type_val + version_val + struct.pack('!h', len(plaintext_bytes)) + plaintext_bytes)
+        new_hashed_val = hmac.finalize()
+        if new_hashed_val != hashed_val:
+            # print('sequence num:', self.read_seq_num)
+            # print('type_val:', type_val)
+            # print('version_val', version_val)
+            # print('len plaintext bytes:', len(plaintext_bytes))
+            # print('plaintext:', plaintext_bytes)
+            # print(struct.pack('q', self.read_seq_num) + type_val + version_val + struct.pack('h', len(plaintext_bytes)) + plaintext_bytes)
+            # print('new hashed val:', new_hashed_val, 'len:', len(new_hashed_val))
+            # print('old hashed val:', hashed_val, 'len:', len(hashed_val))
             raise ValueError("Hashes are not equal!")
         self.read_seq_num += 1
 
@@ -213,12 +230,12 @@ class TLSSession:
         """
         # generate hash of plaintext
         hmac = crypto_hmac.HMAC(self.write_mac, hashes.SHA1(), default_backend())
-        seq_num = struct.pack('q', self.write_seq_num)
-        type_num = struct.pack('b', tls_pkt_bytes[0])
+        seq_num = struct.pack('!q', self.write_seq_num)
+        type_num = struct.pack('!b', tls_pkt_bytes[0])
         version_num = tls_pkt_bytes[1:3]
-        len_num = struct.pack('h', len(plaintext_bytes))
+        len_num = struct.pack('!h', len(plaintext_bytes))
         hmac.update(seq_num + type_num + version_num + len_num + plaintext_bytes)
-        print('\n\n\n',seq_num + type_num + version_num + len_num + plaintext_bytes,'\n\n\n')
+        # print('\n\n\n',seq_num + type_num + version_num + len_num + plaintext_bytes,'\n\n\n')
         hashed_val = hmac.finalize()
 
         # create cipher encryption object
@@ -236,7 +253,7 @@ class TLSSession:
         ciphertext = encryptor.update(plaintext_bytes + hashed_val + padding + bytes([len(padding)])) + encryptor.finalize()
 
         self.write_seq_num += 1
-        return type_num + tls_pkt_bytes[1:3] + struct.pack('h', len(iv + ciphertext)) + iv + ciphertext
+        return type_num + tls_pkt_bytes[1:3] + struct.pack('!h', len(iv + ciphertext)) + iv + ciphertext
 
     def record_handshake_message(self, m):
         self.handshake_messages += m
@@ -357,6 +374,9 @@ class TLS_Visibility:
             2. Create the change cipher spec
             3. store in server_change_cipher_spec
             """
+            local_verify_data = self.session.compute_handshake_verify('read')
+            if local_verify_data != tls_msg.vdata:
+                raise ValueError('VData fields are invalid!')
             self.session.record_handshake_message(raw(tls_msg))
             server_change_cipher_spec = TLSChangeCipherSpec()
             msg1 = TLS(msg=[server_change_cipher_spec])
