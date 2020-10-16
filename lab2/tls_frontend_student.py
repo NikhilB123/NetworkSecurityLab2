@@ -152,6 +152,7 @@ class TLSSession:
         tls_pkt_bytes = raw(tls_pkt)
         tls_pkt_bytes = struct.pack("!B",packet_type)+tls_pkt_bytes[1:]
 
+        print('type:',tls_pkt.type)
         # STUDENT TODO
         """
         1. The beginning of this function, already provided, extracts the data from scapy
@@ -249,9 +250,11 @@ class TLSSession:
         padding = b""
         remainder = (len(plaintext_bytes) + len(hashed_val) + 1) % 16
         if remainder:
-            padding = b"0" * (16 - remainder) 
-        ciphertext = encryptor.update(plaintext_bytes + hashed_val + padding + bytes([len(padding)])) + encryptor.finalize()
-
+            padding = bytes([remainder]) * (16 - remainder) 
+        ciphertext = encryptor.update(plaintext_bytes + hashed_val + padding + bytes([remainder])) + encryptor.finalize()
+        print('length of iv + ciphertext:', len(iv + ciphertext))
+        print('length of iv:', len(iv))
+        print('length of ciphertext:', len(ciphertext))
         self.write_seq_num += 1
         return type_num + tls_pkt_bytes[1:3] + struct.pack('!h', len(iv + ciphertext)) + iv + ciphertext
 
@@ -346,7 +349,10 @@ class TLS_Visibility:
 
 
             self.session.record_handshake_message(raw(tls_msg))
-            self.session.record_handshake_message(tls_response_bytes)
+            self.session.record_handshake_message(raw(server_hello))
+            self.session.record_handshake_message(raw(server_cert))
+            self.session.record_handshake_message(raw(server_key_exchange))
+            self.session.record_handshake_message(raw(server_hello_done))
 
             return tls_response_bytes
         elif isinstance(tls_msg, TLSClientKeyExchange):
@@ -379,8 +385,10 @@ class TLS_Visibility:
                 raise ValueError('VData fields are invalid!')
             self.session.record_handshake_message(raw(tls_msg))
             server_change_cipher_spec = TLSChangeCipherSpec()
+            # self.session.record_handshake_message(raw(server_change_cipher_spec))
             msg1 = TLS(msg=[server_change_cipher_spec])
             output = raw(msg1)
+            print('change cipher spec bytes',output.hex())
 
             # STUDENT TODO
             """
@@ -397,7 +405,7 @@ class TLS_Visibility:
             msg2 = TLS(msg=[server_finished], tls_session=f_session)
             
             # MAY BREAK THINGS
-            # msg2.type = 22
+            msg2.type = 23
 
 
             # STUDENT TODO
@@ -405,10 +413,11 @@ class TLS_Visibility:
             1. encrypt the tls finished message (msg2). You already have a method for this.
             2. store in encrypted_finished
             """
-            # encrypted_finished = self.session.encrypt_tls_pkt(msg2)
-            encrypted_finished = self.encrypt_data(msg2)
+            encrypted_finished = self.session.encrypt_tls_pkt(msg2)
+            # encrypted_finished = self.encrypt_data(msg2)
             
             self.session.handshake = False
+            print('output + encrypted', (output+encrypted_finished).hex())
             return output+encrypted_finished
         elif isinstance(tls_msg, Raw):
             # STUDENT TODO
