@@ -250,9 +250,11 @@ class TLSSession:
         # encrypt plaintext + hashed plaintext + padding + padding val
         padding = b""
         remainder = (len(plaintext_bytes) + len(hashed_val) + 1) % 16
-        if remainder:
-            padding = bytes([remainder]) * (16 - remainder) 
-        ciphertext = encryptor.update(plaintext_bytes + hashed_val + padding + bytes([remainder])) + encryptor.finalize()
+        amount_to_pad_by = (16 - remainder)
+        if amount_to_pad_by < 16:
+            padding = bytes([amount_to_pad_by]) * (amount_to_pad_by) 
+        print('padding:', padding + bytes([amount_to_pad_by]))
+        ciphertext = encryptor.update(plaintext_bytes + hashed_val + padding + bytes([amount_to_pad_by])) + encryptor.finalize()
         print('length of iv + ciphertext:', len(iv + ciphertext))
         print('length of iv:', len(iv))
         print('length of ciphertext:', len(ciphertext))
