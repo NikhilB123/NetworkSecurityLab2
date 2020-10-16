@@ -1,3 +1,5 @@
+# Jonathan Dorsey, Nikhil Bodicharla
+
 #BKCTL# begin_output: http_proxy.py
 import asyncio, time, struct
 from cryptography import x509
@@ -419,9 +421,7 @@ class TLS_Visibility:
             """
             encrypted_finished = self.session.encrypt_tls_pkt(msg2)
             # encrypted_finished = self.encrypt_data(msg2)
-            debug.scapy_show(msg1)
             self.session.handshake = False
-            print('output + encrypted', (output+encrypted_finished).hex())
             return output+encrypted_finished
         elif isinstance(tls_msg, Raw):
             # STUDENT TODO
