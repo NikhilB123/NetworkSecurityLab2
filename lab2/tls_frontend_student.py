@@ -166,6 +166,7 @@ class TLSSession:
         type_val = struct.pack('!b', tls_pkt_bytes[0])
         version_val = tls_pkt_bytes[1:3]
         ciphertext_len = tls_pkt_bytes[3:5]
+        print('length of ciphertext:', int.from_bytes(ciphertext_len, byteorder='big'))
         tls_pkt_bytes = tls_pkt_bytes[5:]
 
         # get IV and create decryptor object 
@@ -399,13 +400,14 @@ class TLS_Visibility:
             """
             f_session = tlsSession()
             f_session.tls_version = 0x303
-            server_finished = TLSFinished(vdata=self.session.compute_handshake_verify('write'),
-                            tls_session=f_session)
+            vdata=self.session.compute_handshake_verify('write')
+            server_finished = TLSFinished(vdata=vdata,
+                            tls_session=f_session, msglen=12)
             
             msg2 = TLS(msg=[server_finished], tls_session=f_session)
             
             # MAY BREAK THINGS
-            msg2.type = 23
+            msg2.type = 22
 
 
             # STUDENT TODO
@@ -415,7 +417,7 @@ class TLS_Visibility:
             """
             encrypted_finished = self.session.encrypt_tls_pkt(msg2)
             # encrypted_finished = self.encrypt_data(msg2)
-            
+            debug.scapy_show(msg1)
             self.session.handshake = False
             print('output + encrypted', (output+encrypted_finished).hex())
             return output+encrypted_finished
